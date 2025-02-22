@@ -1,0 +1,26 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/home/sjyoung/gzllm/install/ros_llm_turtlebot_integration/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_robot/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_output/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_model/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_interfaces/local/lib/python3.10/dist-packages",
+        "/home/sjyoung/gzllm/install/llm_input/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_config/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_bringup/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/sjyoung/gzllm/install/ros_llm_turtlebot_integration/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_robot/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_output/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_model/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_interfaces/local/lib/python3.10/dist-packages",
+        "/home/sjyoung/gzllm/install/llm_input/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_config/lib/python3.10/site-packages",
+        "/home/sjyoung/gzllm/install/llm_bringup/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}
