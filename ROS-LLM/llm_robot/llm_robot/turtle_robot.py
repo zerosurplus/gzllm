@@ -120,7 +120,7 @@ class TurtleRobot(Node):
         # 处理字典类型的参数
         return {
             "robot_name": str(raw_args.get("robot_name", "tb1")),
-            "duration": float(raw_args.get("duration", 5)),
+            "duration": float(raw_args.get("duration", 0.0)),
             "linear_x": float(raw_args.get("linear_x", 0.0)),
             "angular_z": float(raw_args.get("angular_z", 0.0))
         }
@@ -153,7 +153,7 @@ class TurtleRobot(Node):
             )
         }
         
-        # 创建高频定时器（10Hz）
+        # 创建高频定时器
         self.create_timer(0.1, lambda: self.motion_control_loop(motion_id))
         self.get_logger().info(f"Started motion {motion_id}")
 

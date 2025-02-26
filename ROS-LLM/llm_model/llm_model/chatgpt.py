@@ -73,6 +73,27 @@ class ChatGPTNode(Node):
         )
         return response
 
+    def process_chatgpt_response(self, messages_input):
+        chatgpt_response = self.generate_chatgpt_response(messages_input)
+        message, content, function_call, function_flag = self.get_response_information(chatgpt_response)
+        self.add_message_to_history(role="assistant", content=content, function_call=function_call)
+        self.write_chat_history_to_json()
+        if function_flag == 1:  # 如果响应类型是函数调用
+            self.publish_string("function_call", self.llm_response_type_publisher)
+            self.get_logger().info("STATE: function_execution")
+            self.function_call(function_call)  # 调用机器人函数
+        else:  # 如果响应类型不是函数调用
+            self.publish_string("feedback_for_user", self.llm_response_type_publisher)
+            self.get_logger().info("STATE: feedback_for_user")
+            self.publish_string(content, self.llm_feedback_publisher)
+
+    def llm_callback(self, msg):
+        self.get_logger().info("STATE: model_processing")
+        self.get_logger().info(f"Input message received: {msg.data}")
+        user_prompt = msg.data
+        self.add_message_to_history("user", user_prompt)
+        self.process_chatgpt_response(config.chat_history)
+        
     def get_response_information(self, chatgpt_response):
         message = chatgpt_response["choices"][0]["message"]
         content = message.get("content")
@@ -162,27 +183,6 @@ class ChatGPTNode(Node):
             self.process_chatgpt_response(config.chat_history)
         except Exception as e:
             self.get_logger().info(f"ChatGPT function call service failed {e}")
-
-    def process_chatgpt_response(self, messages_input):
-        chatgpt_response = self.generate_chatgpt_response(messages_input)
-        message, content, function_call, function_flag = self.get_response_information(chatgpt_response)
-        self.add_message_to_history(role="assistant", content=content, function_call=function_call)
-        self.write_chat_history_to_json()
-        if function_flag == 1:  # 如果响应类型是函数调用
-            self.publish_string("function_call", self.llm_response_type_publisher)
-            self.get_logger().info("STATE: function_execution")
-            self.function_call(function_call)  # 调用机器人函数
-        else:  # 如果响应类型不是函数调用
-            self.publish_string("feedback_for_user", self.llm_response_type_publisher)
-            self.get_logger().info("STATE: feedback_for_user")
-            self.publish_string(content, self.llm_feedback_publisher)
-
-    def llm_callback(self, msg):
-        self.get_logger().info("STATE: model_processing")
-        self.get_logger().info(f"Input message received: {msg.data}")
-        user_prompt = msg.data
-        self.add_message_to_history("user", user_prompt)
-        self.process_chatgpt_response(config.chat_history)
 
 def main(args=None):
     rclpy.init(args=args)

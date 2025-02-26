@@ -49,9 +49,11 @@ class UserConfig:
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         # [required]: Name of the OpenAI language model to be used
         # self.openai_model = "gpt-3.5-turbo-0125"
-        #self.openai_model="gpt-4-0613"
-        self.openai_model="gpt-4-1106-preview"
-        #self.openai_model="o1-preview"
+        # self.openai_model="gpt-4-0613"
+        # self.openai_model="gpt-4-1106-preview"
+        self.openai_model="gpt-4"
+        # self.openai_model="gpt-4o"
+        # self.openai_model="o1-preview"
         # [optional]: Name of the organization under which the OpenAI API key is registered
         self.openai_organization = "Auromix"
         # [optional]: Controls the creativity of the AI’s responses. Higher values lead to more creative, but less coherent, responses

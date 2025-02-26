@@ -76,7 +76,7 @@ def generate_launch_description():
 
     world = os.path.join(
         get_package_share_directory('turtlebot3_multi_robot'),
-        'worlds', 'multi_robot_world.world')
+        'worlds', 'multi_empty_world.world')
 
     gzserver_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
