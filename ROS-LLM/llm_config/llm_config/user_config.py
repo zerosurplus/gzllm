@@ -40,19 +40,22 @@
 
 from .robot_behavior import RobotBehavior
 import os
-
+os.environ["OPENAI_BASE_URL"] = "https://api.openai.com/v1"
 
 class UserConfig:
     def __init__(self):
         # OpenAI API related
         # [required]: OpenAI API key
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        # [required]: OpenAI API key
+        self.openai_api_base = os.getenv("OPENAI_BASE_URL")
         # [required]: Name of the OpenAI language model to be used
-        # self.openai_model = "gpt-3.5-turbo-0125"
         # self.openai_model="gpt-4-0613"
         # self.openai_model="gpt-4-1106-preview"
-        self.openai_model="gpt-4"
-        # self.openai_model="gpt-4o"
+        # self.openai_model="gpt-4"
+        self.openai_model="gpt-4o"
+        # self.openai_model="deepseek-ai/DeepSeek-V3"
+        # self.openai_model="gpt-4o-mini"
         # self.openai_model="o1-preview"
         # [optional]: Name of the organization under which the OpenAI API key is registered
         self.openai_organization = "Auromix"
