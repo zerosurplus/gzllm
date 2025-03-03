@@ -12,11 +12,13 @@ import time
 import openai
 from llm_config.user_config import UserConfig
 from openai import OpenAI
+import threading
 
 # Global Initialization
 config = UserConfig()
 openai.api_key = config.openai_api_key
 openai.api_base = config.openai_api_base
+
 
 class ChatGPTNode(Node):
     def __init__(self):
@@ -41,7 +43,66 @@ class ChatGPTNode(Node):
         self.write_chat_history_to_json()
         self.get_logger().info(f"Chat history saved to {self.chat_history_file}")
         self.publish_string("llm_model_processing", self.initialization_publisher)
-        self.client = OpenAI(base_url=config.openai_api_base,api_key=config.openai_api_key)
+        self.client = OpenAI(base_url=config.openai_api_base, api_key=config.openai_api_key)
+
+        # 新增任务队列和状态变量
+        self.turtle_status = "IDLE"
+        self.motion_queue = []  # 修改点：新增任务队列
+        self.current_request = None  # 修改点：初始化 current_request 属性
+        self.status_subscriber = self.create_subscription(
+            String, '/turtle_robot/status', self.status_callback, 10)
+        self.motion_queue_lock = threading.Lock()  # 新增任务队列锁
+
+    def status_callback(self, msg):
+        """监听机器人状态并触发任务队列执行"""
+        old_status = self.turtle_status
+        self.turtle_status = msg.data
+        if old_status != self.turtle_status:
+            self.get_logger().info(f"Turtle status changed from {old_status} to {self.turtle_status}")
+
+        if self.turtle_status == "IDLE":
+            confirmation_count = 0
+            max_confirmations = 3
+            while confirmation_count < max_confirmations:
+                if self.turtle_status == "IDLE":
+                    confirmation_count += 1
+                else:
+                    confirmation_count = 0
+                time.sleep(0.5)  # 每次检查间隔 0.5 秒
+
+            with self.motion_queue_lock:  # 使用锁确保线程安全
+                if self.motion_queue:
+                    next_task = self.motion_queue.pop(0)
+                    if not isinstance(next_task, str):  # 确保任务为字符串类型
+                        next_task = json.dumps(next_task)  # 如果不是字符串，则序列化为 JSON
+                    self.send_motion_request(next_task)
+
+    def send_motion_request(self, request_text):
+        """发送运动请求"""
+        if not isinstance(request_text, str):  # 确保请求文本为字符串
+            request_text = json.dumps(request_text)  # 如果不是字符串，则序列化为 JSON
+
+        # 记录当前请求
+        self.current_request = request_text
+
+        client = self.create_client(ChatGPT, '/ChatGPT_function_call_service')
+        max_retries = 3
+        retry_count = 0
+        delay_time = 0.5  # 初始延迟时间
+        while not client.wait_for_service(timeout_sec=delay_time) and retry_count < max_retries:
+            self.get_logger().info(f"Service not available, retrying... ({retry_count + 1}/{max_retries})")
+            retry_count += 1
+            delay_time *= 2  # 每次重试增加延迟时间
+
+        if retry_count == max_retries:
+            self.get_logger().error("Max retries reached. Service call failed.")
+            return
+
+        request = ChatGPT.Request()
+        request.request_text = request_text  # 确保此处为字符串类型
+        future = client.call_async(request)
+        future.add_done_callback(self.function_call_response_callback)
+
     def state_listener_callback(self, msg):
         self.get_logger().debug(f"model node get current State:{msg}")
 
@@ -95,28 +156,23 @@ class ChatGPTNode(Node):
         user_prompt = msg.data
         self.add_message_to_history("user", user_prompt)
         self.process_chatgpt_response(config.chat_history)
-        
+
     def get_response_information(self, chatgpt_response):
-        # 判断返回值类型
         if isinstance(chatgpt_response, dict):  # 如果是旧版 SDK 返回的字典
             choice = chatgpt_response["choices"][0]["message"]
             content = choice.get("content")
             function_call = choice.get("function_call", None)
         else:  # 如果是新版 SDK 返回的类实例
-            choice = chatgpt_response.choices[0]  # 访问 ChatCompletion 的 choices 属性
-            message = choice.message              # 获取 Message 对象
-            content = getattr(message, "content", None)  # 提取 content
-            function_call = getattr(message, "function_call", None)  # 提取 function_call
-        # 将 function_call 转换为可序列化的格式
+            choice = chatgpt_response.choices[0]
+            message = choice.message
+            content = getattr(message, "content", None)
+            function_call = getattr(message, "function_call", None)
         if function_call:
             function_call = {
                 "name": function_call.name,
                 "arguments": function_call.arguments
             }
-        # 判断响应类型
         function_flag = 0 if content is not None else 1
-
-        # 打印日志信息
         self.get_logger().info(f"Get message from OpenAI: {choice}, type: {type(choice)}")
         self.get_logger().info(f"Get content from OpenAI: {content}, type: {type(content)}")
         self.get_logger().info(f"Get function call from OpenAI: {function_call}, type: {type(function_call)}")
@@ -134,73 +190,117 @@ class ChatGPTNode(Node):
             return False
 
     def function_call(self, function_call_input):
-        # 添加服务可用性检查
         if not self.function_call_client.wait_for_service(timeout_sec=3.0):
             self.get_logger().error("ChatGPT_function_call_service 未就绪，调用失败")
             return
         
         try:
-            # 参数深度解析
             parsed_arguments = self._parse_function_arguments(function_call_input)
-            
-            # 构造安全参数结构
             validated_request = {
                 "name": function_call_input["name"],
-                "arguments": parsed_arguments  # 确保是字典类型
+                "arguments": parsed_arguments
             }
-            
-            # 安全序列化
             function_call_input_str = json.dumps(
                 validated_request,
                 ensure_ascii=False,
                 separators=(",", ":")
             )
-            
             self.function_name = validated_request["name"]
             self.function_call_request.request_text = function_call_input_str
-            
             self.get_logger().info(
                 f"Request for ChatGPT_function_call_service: {self.function_call_request.request_text}",
-                throttle_duration_sec=1  # 添加节流防止日志轰炸
+                throttle_duration_sec=1
             )
-            
             future = self.function_call_client.call_async(self.function_call_request)
             future.add_done_callback(self.function_call_response_callback)
-            
+        
         except Exception as e:
             self.get_logger().error(f"函数调用预处理失败: {str(e)}")
 
     def _parse_function_arguments(self, function_call_input):
-        """处理多级编码参数"""
         raw_arguments = function_call_input.get("arguments", {})
-        
-        # 处理字符串类型的arguments
         if isinstance(raw_arguments, str):
             try:
-                return json.loads(raw_arguments)
+                parsed_args = json.loads(raw_arguments)
             except json.JSONDecodeError:
                 self.get_logger().error("无法解析的arguments格式")
                 return {}
-        
-        # 处理字典类型的arguments
-        return {
-            "robot_name": str(raw_arguments.get("robot_name", "tb1")),
-            "duration": float(raw_arguments.get("duration", 5)),
-            "linear_x": float(raw_arguments.get("linear_x", 0.0)),
-            "angular_z": float(raw_arguments.get("angular_z", 0.0))
-        }
+        else:
+            parsed_args = raw_arguments
+
+        required_fields = ["robot_name", "duration", "linear_x", "angular_z"]
+        for field in required_fields:
+            if field not in parsed_args:
+                self.get_logger().error(f"Missing required field: {field}")
+                return {}
+
+        try:
+            robot_name = str(parsed_args["robot_name"])
+            duration = float(parsed_args["duration"])
+            linear_x = float(parsed_args["linear_x"])
+            angular_z = float(parsed_args["angular_z"])
+
+            # 参数范围校验
+            if duration <= 0:
+                raise ValueError("Duration must be positive.")
+            if abs(linear_x) > 1.0 or abs(angular_z) > 1.0:
+                raise ValueError("Linear and angular values must be within [-1.0, 1.0].")
+
+            return {
+                "robot_name": robot_name,
+                "duration": duration,
+                "linear_x": linear_x,
+                "angular_z": angular_z
+            }
+        except (KeyError, ValueError) as e:
+            self.get_logger().error(f"Invalid arguments: {str(e)}")
+            return {}
 
     def function_call_response_callback(self, future):
         try:
             response = future.result()
-            self.get_logger().info(f"Response from ChatGPT_function_call_service: {response}")
-            response_text = response.response_text  # 假设响应内容在 `response_text` 字段中
+            if response is None or not hasattr(response, 'response_text') or response.response_text is None:
+                self.get_logger().error("Invalid response received.")
+                return
+
+            response_text = response.response_text
+            self.get_logger().info(f"Parsed response text: {response_text}")
+            if "Robot is busy" in response_text:
+                self.get_logger().warn("Robot is busy, adding request back to queue")
+                if isinstance(self.current_request, dict):  # 如果当前请求是字典
+                    self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
+                
+                # 修改点：仅在任务有效时重新加入队列
+                if self.current_request and self.current_request not in self.motion_queue:
+                    self.motion_queue.append(self.current_request)
+                return
+
+            # 继续处理正常响应
             self.add_message_to_history(role="function", name=self.function_name, content=response_text)
-            
-            # 重新生成ChatGPT响应，处理可能的新函数调用
             self.process_chatgpt_response(config.chat_history)
+
+            # 减少延迟时间（例如 0.5 秒）
+            time.sleep(0.5)
+        except AttributeError as e:
+            self.get_logger().error(f"Attribute error in response handling: {str(e)}")
+            if isinstance(self.current_request, dict):  # 如果当前请求是字典
+                self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
+            if self.current_request and self.current_request not in self.motion_queue:
+                self.motion_queue.append(self.current_request)
+
+        except TypeError as e:
+            self.get_logger().error(f"Type error in response handling: {str(e)}")
+            if isinstance(self.current_request, dict):  # 如果当前请求是字典
+                self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
+            if self.current_request and self.current_request not in self.motion_queue:
+                self.motion_queue.append(self.current_request)
+
         except Exception as e:
-            self.get_logger().info(f"ChatGPT function call service failed {e}")
+            self.get_logger().error(f"Unexpected error in response handling: {str(e)}")
+            if isinstance(self.current_request, dict):  # 如果当前请求是字典
+                self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
+            if self.current_request and self.current_request not in self.motion_queue:
+                self.motion_queue.append(self.current_request)
 
 def main(args=None):
     rclpy.init(args=args)

@@ -65,41 +65,38 @@ class TurtleRobot(Node):
         # 初始化运动控制参数
         self.active_motions = {}  # 新增：跟踪正在进行的运动
 
+        self.status_publisher = self.create_publisher(String, "/turtle_robot/status", 10)
+        self.timer = self.create_timer(1.0, self.publish_status)
+
+    def publish_status(self):
+        status_msg = String()
+        if self.active_motions:
+            status_msg.data = "BUSY"
+        else:
+            status_msg.data = "IDLE"
+        self.status_publisher.publish(status_msg)
+        
     def function_call_callback(self, request, response):
         try:
-            # 原始请求日志记录
-            self.get_logger().debug(f"原始请求: {request.request_text}")
-            
             req = json.loads(request.request_text)
             function_name = req["name"]
             
-            self.get_logger().info(f"Received function call: {function_name}")
-            
             if function_name == "publish_cmd_vel":
-                # 参数安全提取
+                if any(motion["publisher"].topic_name == f"/{req['arguments']['robot_name']}/cmd_vel" for motion in self.active_motions.values()):
+                    response.response_text = "Robot is busy, please try again later"
+                    return response
+                
                 function_args = self._validate_arguments(req.get("arguments", {}))
-                
                 if not function_args:
-                    raise ValueError("无效的运动参数")
+                    raise ValueError("Invalid motion parameters")
                 
-                # 参数类型转换
-                robot_name = str(function_args["robot_name"])
-                duration = max(0.0, float(function_args["duration"]))
-                linear_x = min(max(-1.0, float(function_args["linear_x"])), 1.0)
-                angular_z = min(max(-1.0, float(function_args["angular_z"])), 1.0)
-                
-                # 执行运动控制
-                self.publish_cmd_vel(robot_name, duration, linear_x, angular_z)
-                response.response_text = f"Motion command sent to {robot_name}"
-                
-        except json.JSONDecodeError as e:
-            error_msg = f"JSON解析失败: {str(e)}"
-            self.get_logger().error(error_msg)
-            response.response_text = error_msg
-        except KeyError as e:
-            error_msg = f"缺少必要参数: {str(e)}"
-            self.get_logger().error(error_msg)
-            response.response_text = error_msg
+                self.publish_cmd_vel(
+                    function_args["robot_name"],
+                    function_args["duration"],
+                    function_args["linear_x"],
+                    function_args["angular_z"]
+                )
+                response.response_text = f"Motion command sent to {function_args['robot_name']}"
         except Exception as error:
             self.get_logger().error(f"Service failed: {str(error)}")
             response.response_text = f"Error: {str(error)}"
@@ -107,75 +104,69 @@ class TurtleRobot(Node):
         return response
 
     def _validate_arguments(self, raw_args):
-        """参数验证与标准化"""
-        # 处理字符串类型的参数
-        if isinstance(raw_args, str):
-            try:
-                parsed_args = json.loads(raw_args)
-            except json.JSONDecodeError:
-                self.get_logger().error("参数格式错误")
-                return None
-            return parsed_args
+        try:
+            parsed_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            self.get_logger().error("Invalid JSON format, using default values")
+            parsed_args = {}
         
-        # 处理字典类型的参数
+        # 设置默认值和范围检查
         return {
-            "robot_name": str(raw_args.get("robot_name", "tb1")),
-            "duration": float(raw_args.get("duration", 0.0)),
-            "linear_x": float(raw_args.get("linear_x", 0.0)),
-            "angular_z": float(raw_args.get("angular_z", 0.0))
+            "robot_name": parsed_args.get("robot_name", "tb1"),
+            "duration": max(0.0, float(parsed_args.get("duration", 0.0))),  # 确保 duration >= 0
+            "linear_x": min(max(-1.0, float(parsed_args.get("linear_x", 0.0))), 1.0),
+            "angular_z": min(max(-1.0, float(parsed_args.get("angular_z", 0.0))), 1.0)
         }
 
     def publish_cmd_vel(self, robot_name, duration, linear_x=0.0, angular_z=0.0):
-        # 定义标准QoS配置
+        if any(motion["publisher"].topic_name == f"/{robot_name}/cmd_vel" for motion in self.active_motions.values()):
+            self.get_logger().warn(f"Robot {robot_name} is already moving, ignoring new command")
+            return
+        
         qos_profile = QoSProfile(
             reliability=QoSReliabilityPolicy.RELIABLE,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=5
         )
         
-        # 获取或创建发布者
         topic_name = f"/{robot_name}/cmd_vel"
         if robot_name not in self.cmd_vel_publishers:
             self.cmd_vel_publishers[robot_name] = self.create_publisher(
-                Twist, 
-                topic_name, 
-                qos_profile=qos_profile  # 修正QoS配置
+                Twist, topic_name, qos_profile=qos_profile
             )
-            
-        # 非阻塞实现：使用定时器
+        
         motion_id = f"{robot_name}_{time.time()}"
         self.active_motions[motion_id] = {
             "publisher": self.cmd_vel_publishers[robot_name],
-            "end_time": self.get_clock().now() + Duration(seconds=duration),
-            "twist": Twist(
-                linear=Vector3(x=linear_x),
-                angular=Vector3(z=angular_z)
-            )
+            "start_time": self.get_clock().now(),
+            "duration": Duration(seconds=duration),
+            "twist": Twist(linear=Vector3(x=linear_x), angular=Vector3(z=angular_z))
         }
         
-        # 创建高频定时器
-        self.create_timer(0.1, lambda: self.motion_control_loop(motion_id))
+        self.create_timer(0.02, lambda: self.motion_control_loop(motion_id))
         self.get_logger().info(f"Started motion {motion_id}")
 
     def motion_control_loop(self, motion_id):
-        """非阻塞运动控制核心逻辑"""
         if motion_id not in self.active_motions:
             return
-            
-        motion = self.active_motions[motion_id]
-        current_time = self.get_clock().now()
         
-        if current_time < motion["end_time"]:
-            # 持续发布速度指令
+        motion = self.active_motions[motion_id]
+        elapsed_time = self.get_clock().now() - motion["start_time"]
+        
+        if elapsed_time < motion["duration"]:
             motion["publisher"].publish(motion["twist"])
         else:
-            # 发布停止指令
             stop_twist = Twist()
             motion["publisher"].publish(stop_twist)
             
-            # 清理资源
-            del self.active_motions[motion_id]
-            self.get_logger().info(f"Motion {motion_id} completed")
+            # 销毁定时器
+            timer = motion.pop("timer", None)
+            if timer:
+                timer.cancel()
+            
+            if motion_id in self.active_motions:
+                del self.active_motions[motion_id]
+                self.get_logger().info(f"Motion {motion_id} completed")
 def main():
     rclpy.init()
     turtle_robot = TurtleRobot()
