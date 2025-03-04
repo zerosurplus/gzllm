@@ -194,7 +194,7 @@
             <ode>
               <mu>100000.0</mu>
               <mu2>100000.0</mu2>
-              <fdir1>0 0 0</fdir1>
+              <fdir1>1 0 0</fdir1>
               <slip1>0.0</slip1>
               <slip2>0.0</slip2>
             </ode>
@@ -252,7 +252,7 @@
             <ode>
               <mu>100000.0</mu>
               <mu2>100000.0</mu2>
-              <fdir1>0 0 0</fdir1>
+              <fdir1>1 0 0</fdir1>
               <slip1>0.0</slip1>
               <slip2>0.0</slip2>
             </ode>
@@ -442,6 +442,7 @@
       <axis>
         <xyz>0 0 1</xyz>
       </axis>
+      <dynamics damping="0.1" friction="1.0"/>
     </joint>
 
     <joint name="wheel_right_joint" type="revolute">
@@ -451,16 +452,19 @@
       <axis>
         <xyz>0 0 1</xyz>
       </axis>
+      <dynamics damping="0.1" friction="1.0"/>
     </joint>
 
     <joint name='caster_back_right_joint' type='ball'>
       <parent>base_link</parent>
       <child>caster_back_right_link</child>
+      <dynamics damping="0.1" friction="1.0"/>
     </joint>
 
     <joint name='caster_back_left_joint' type='ball'>
       <parent>base_link</parent>
       <child>caster_back_left_link</child>
+      <dynamics damping="0.1" friction="1.0"/>
     </joint>
 
     <joint name="imu_joint" type="fixed">
@@ -513,8 +517,8 @@
       <wheel_separation>0.287</wheel_separation>
       <wheel_diameter>0.066</wheel_diameter>
 
-      <max_wheel_torque>20</max_wheel_torque>
-      <max_wheel_acceleration>1.0</max_wheel_acceleration>
+      <max_wheel_torque>50</max_wheel_torque>
+      <max_wheel_acceleration>2.0</max_wheel_acceleration>
 
       <command_topic>cmd_vel</command_topic>
 

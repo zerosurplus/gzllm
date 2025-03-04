@@ -4,7 +4,10 @@ from rclpy.node import Node
 from llm_interfaces.srv import ChatGPT
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
-
+from threading import Lock  # 导入线程锁
+from collections import deque
+from typing import Deque, Optional
+import copy
 # LLM related
 import json
 import os
@@ -47,60 +50,78 @@ class ChatGPTNode(Node):
 
         # 新增任务队列和状态变量
         self.turtle_status = "IDLE"
-        self.motion_queue = []  # 修改点：新增任务队列
+        self.task_fail_counts = {}  # 新增失败计数器
+        self.motion_queue = deque(maxlen=10)  # 替换list为deque（优化性能）
         self.current_request = None  # 修改点：初始化 current_request 属性
         self.status_subscriber = self.create_subscription(
             String, '/turtle_robot/status', self.status_callback, 10)
         self.motion_queue_lock = threading.Lock()  # 新增任务队列锁
 
     def status_callback(self, msg):
-        """监听机器人状态并触发任务队列执行"""
-        old_status = self.turtle_status
-        self.turtle_status = msg.data
-        if old_status != self.turtle_status:
-            self.get_logger().info(f"Turtle status changed from {old_status} to {self.turtle_status}")
+        """机器人状态回调函数（线程安全+deque优化版）"""
+        with self.motion_queue_lock:
+            # 原子操作：状态更新与队列访问
+            old_status = self.turtle_status
+            self.turtle_status = msg.data  # 更新当前状态
 
-        if self.turtle_status == "IDLE":
-            confirmation_count = 0
-            max_confirmations = 3
-            while confirmation_count < max_confirmations:
-                if self.turtle_status == "IDLE":
-                    confirmation_count += 1
-                else:
-                    confirmation_count = 0
-                time.sleep(0.5)  # 每次检查间隔 0.5 秒
+            # 状态变更日志（非关键操作，不占用锁）
+            if old_status != self.turtle_status:
+                self.get_logger().info(f"状态变更: {old_status} -> {self.turtle_status}")
 
-            with self.motion_queue_lock:  # 使用锁确保线程安全
-                if self.motion_queue:
-                    next_task = self.motion_queue.pop(0)
-                    if not isinstance(next_task, str):  # 确保任务为字符串类型
-                        next_task = json.dumps(next_task)  # 如果不是字符串，则序列化为 JSON
+            # 仅在IDLE状态处理队列
+            if self.turtle_status == "IDLE" and self.motion_queue:
+                # 关键修正点：使用popleft()
+                next_task = self.motion_queue.popleft()  # 🚩 deque的正确取任务方式
+
+                # 防御性编程：数据校验
+                if not isinstance(next_task, str):
+                    self.get_logger().error(f"非法任务类型: {type(next_task)}")
+                    return
+
+                # 失败次数检查
+                if self.task_fail_counts.get(next_task, 0) >= 3:
+                    self.get_logger().warn(f"任务重试超限: {next_task[:20]}...")
+                    del self.task_fail_counts[next_task]
+                    return
+
+                # 发送任务（异步执行）
+                try:
                     self.send_motion_request(next_task)
+                except Exception as e:
+                    self.get_logger().error(f"任务发送失败: {str(e)}")
+                    # 重试逻辑
+                    self.motion_queue.appendleft(next_task)  # 🚩 使用deque专有方法
+                    self.task_fail_counts[next_task] = self.task_fail_counts.get(next_task, 0) + 1
 
     def send_motion_request(self, request_text):
-        """发送运动请求"""
-        if not isinstance(request_text, str):  # 确保请求文本为字符串
-            request_text = json.dumps(request_text)  # 如果不是字符串，则序列化为 JSON
+        """发送运动请求（修复future问题版）"""
+        if not isinstance(request_text, str):
+            request_text = json.dumps(request_text)
 
-        # 记录当前请求
-        self.current_request = request_text
-
+        # 保留原有客户端初始化逻辑
         client = self.create_client(ChatGPT, '/ChatGPT_function_call_service')
         max_retries = 3
         retry_count = 0
-        delay_time = 0.5  # 初始延迟时间
+        delay_time = 0.5
         while not client.wait_for_service(timeout_sec=delay_time) and retry_count < max_retries:
             self.get_logger().info(f"Service not available, retrying... ({retry_count + 1}/{max_retries})")
             retry_count += 1
-            delay_time *= 2  # 每次重试增加延迟时间
+            delay_time *= 2
 
         if retry_count == max_retries:
             self.get_logger().error("Max retries reached. Service call failed.")
             return
 
         request = ChatGPT.Request()
-        request.request_text = request_text  # 确保此处为字符串类型
+        request.request_text = request_text
+        
+        # 关键修改点：绑定数据到future对象
         future = client.call_async(request)
+        future.task_data = {  # 新增此行
+            "request_text": request_text,  # 直接存储字符串
+            "timestamp": time.time()
+        }
+        
         future.add_done_callback(self.function_call_response_callback)
 
     def state_listener_callback(self, msg):
@@ -212,6 +233,10 @@ class ChatGPTNode(Node):
                 throttle_duration_sec=1
             )
             future = self.function_call_client.call_async(self.function_call_request)
+            future.task_data = {  # 新增此行
+                "request_text": function_call_input_str,  # 直接存储字符串
+                "timestamp": time.time()
+            }
             future.add_done_callback(self.function_call_response_callback)
         
         except Exception as e:
@@ -257,50 +282,52 @@ class ChatGPTNode(Node):
             return {}
 
     def function_call_response_callback(self, future):
+        """服务响应回调（线程安全修复版）"""
+        # 新增future有效性校验
+        if not hasattr(future, 'task_data'):
+            self.get_logger().error("Invalid future object")
+            self.get_logger().error(f"Future object: {future}")
+            return
+
+        # 从future直接获取数据（关键修改点）
+        task_data = future.task_data
+        try:
+            request_text = task_data["request_text"]
+        except KeyError:
+            self.get_logger().error("Missing request_text in task_data")
+            return
+
+        # 保持原有响应处理逻辑
         try:
             response = future.result()
-            if response is None or not hasattr(response, 'response_text') or response.response_text is None:
-                self.get_logger().error("Invalid response received.")
-                return
-
-            response_text = response.response_text
-            self.get_logger().info(f"Parsed response text: {response_text}")
-            if "Robot is busy" in response_text:
-                self.get_logger().warn("Robot is busy, adding request back to queue")
-                if isinstance(self.current_request, dict):  # 如果当前请求是字典
-                    self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
-                
-                # 修改点：仅在任务有效时重新加入队列
-                if self.current_request and self.current_request not in self.motion_queue:
-                    self.motion_queue.append(self.current_request)
-                return
-
-            # 继续处理正常响应
-            self.add_message_to_history(role="function", name=self.function_name, content=response_text)
-            self.process_chatgpt_response(config.chat_history)
-
-            # 减少延迟时间（例如 0.5 秒）
-            time.sleep(0.5)
-        except AttributeError as e:
-            self.get_logger().error(f"Attribute error in response handling: {str(e)}")
-            if isinstance(self.current_request, dict):  # 如果当前请求是字典
-                self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
-            if self.current_request and self.current_request not in self.motion_queue:
-                self.motion_queue.append(self.current_request)
-
-        except TypeError as e:
-            self.get_logger().error(f"Type error in response handling: {str(e)}")
-            if isinstance(self.current_request, dict):  # 如果当前请求是字典
-                self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
-            if self.current_request and self.current_request not in self.motion_queue:
-                self.motion_queue.append(self.current_request)
-
+            if not hasattr(response, 'response_text'):
+                raise ValueError("无效的服务响应格式")
         except Exception as e:
-            self.get_logger().error(f"Unexpected error in response handling: {str(e)}")
-            if isinstance(self.current_request, dict):  # 如果当前请求是字典
-                self.current_request = json.dumps(self.current_request)  # 序列化为 JSON
-            if self.current_request and self.current_request not in self.motion_queue:
-                self.motion_queue.append(self.current_request)
+            self.get_logger().error(f"服务调用失败: {str(e)}")
+            return
+
+        # 优化队列处理逻辑
+        if "Robot is busy" in response.response_text:
+            with self.motion_queue_lock:
+                if request_text in self.motion_queue:
+                    self.get_logger().debug("重复任务已存在")
+                    return
+                if len(self.motion_queue) >= 10:
+                    self.get_logger().warn("任务队列已满，移除最早的任务")
+                    self.motion_queue.popleft()
+                self.motion_queue.append(request_text)  # 使用绑定数据
+            return
+
+        # 保持原有正常处理流程
+        try:
+            self.add_message_to_history(
+                role="function", 
+                name=self.function_name,
+                content=response.response_text
+            )
+            self.process_chatgpt_response(config.chat_history)
+        except json.JSONDecodeError:
+            self.get_logger().error("响应JSON解析失败")
 
 def main(args=None):
     rclpy.init(args=args)
