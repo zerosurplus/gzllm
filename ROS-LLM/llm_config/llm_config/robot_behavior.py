@@ -31,133 +31,136 @@
 robot_functions_list_1 = [
     {
         "name": "publish_cmd_vel",
-        "description": "Publish cmd_vel message to control the movement of turtlesim, including rotation and movement,only used for turtlesim,not for robotic arm",
+        "description": "Control robot movement and rotation.",
         "parameters": {
             "type": "object",
             "properties": {
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "Movement duration (seconds).",
+                },
                 "linear_x": {
                     "type": "number",
-                    "description": "The linear velocity along the x-axis",
-                },
-                "linear_y": {
-                    "type": "number",
-                    "description": "The linear velocity along the y-axis",
-                },
-                "linear_z": {
-                    "type": "number",
-                    "description": "The linear velocity along the z-axis",
-                },
-                "angular_x": {
-                    "type": "number",
-                    "description": "The angular velocity around the x-axis",
-                },
-                "angular_y": {
-                    "type": "number",
-                    "description": "The angular velocity around the y-axis",
+                    "description": "Linear velocity along x-axis.",
                 },
                 "angular_z": {
                     "type": "number",
-                    "description": "The angular velocity around the z-axis",
+                    "description": "Angular velocity around z-axis.",
                 },
             },
             "required": [
+                "robot_name",
+                "duration",
                 "linear_x",
-                "linear_y",
-                "linear_z",
-                "angular_x",
-                "angular_y",
                 "angular_z",
             ],
         },
     },
     {
-        "name": "reset_turtlesim",
-        "description": "Resets the turtlesim to its initial state and clears the screen,only used for turtlesim,not for robotic arm",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "publish_target_pose",
-        "description": "Publish target pose message to control the movement of arm robot, including x, y, z, roll, pitch, yaw",
+        "name": "move_in_circle",
+        "description": "Move robot in a circle.",
         "parameters": {
             "type": "object",
             "properties": {
-                "x": {
-                    "type": "number",
-                    "description": "The x position of the target pose",
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
                 },
-                "y": {
+                "radius": {
                     "type": "number",
-                    "description": "The y position of the target pose",
+                    "description": "Circle radius.",
                 },
-                "z": {
+                "duration": {
                     "type": "number",
-                    "description": "The z position of the target pose",
-                },
-                "roll": {
-                    "type": "number",
-                    "description": "The roll of the target pose",
-                },
-                "pitch": {
-                    "type": "number",
-                    "description": "The pitch of the target pose",
-                },
-                "yaw": {
-                    "type": "number",
-                    "description": "The yaw of the target pose",
+                    "description": "Movement duration (seconds).",
                 },
             },
             "required": [
-                "x",
-                "y",
-                "z",
-                "roll",
-                "pitch",
-                "yaw",
+                "robot_name",
+                "radius",
+                "duration",
             ],
         },
     },
     {
-        "name": "publish_target_pose",
-        "description": "Publish target pose message to control the movement of arm robot, including x, y, z, roll, pitch, yaw. For example,[0.2, 0.2, 0.2, 0.2, 0.2, 0.2] is a valid target pose.",
+        "name": "move_in_rectangle",
+        "description": "Move robot in a rectangle.",
         "parameters": {
             "type": "object",
             "properties": {
-                "x": {
-                    "type": "number",
-                    "description": "The x position of the target pose",
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
                 },
-                "y": {
+                "length": {
                     "type": "number",
-                    "description": "The y position of the target pose",
+                    "description": "Rectangle length.",
                 },
-                "z": {
+                "width": {
                     "type": "number",
-                    "description": "The z position of the target pose",
+                    "description": "Rectangle width.",
                 },
-                "roll": {
+                "duration": {
                     "type": "number",
-                    "description": "The roll of the target pose in radians",
-                },
-                "pitch": {
-                    "type": "number",
-                    "description": "The pitch of the target pose in radians",
-                },
-                "yaw": {
-                    "type": "number",
-                    "description": "The yaw of the target pose in radians",
+                    "description": "Movement duration (seconds).",
                 },
             },
             "required": [
+                "robot_name",
+                "length",
+                "width",
+                "duration",
+            ],
+        },
+    },
+    {
+        "name": "navigate_to_position",
+        "description": "Navigate robot to a position.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
+                },
+                "x": {
+                    "type": "number",
+                    "description": "Target x-coordinate.",
+                },
+                "y": {
+                    "type": "number",
+                    "description": "Target y-coordinate.",
+                },
+            },
+            "required": [
+                "robot_name",
                 "x",
                 "y",
-                "z",
-                "roll",
-                "pitch",
-                "yaw",
+            ],
+        },
+    },
+    {
+        "name": "navigate_to_robot",
+        "description": "Navigate robot to another robot.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
+                },
+                "target_robot_name": {
+                    "type": "string",
+                    "description": "Target robot name.",
+                },
+            },
+            "required": [
+                "robot_name",
+                "target_robot_name",
             ],
         },
     },
@@ -166,57 +169,93 @@ robot_functions_list_1 = [
 robot_functions_list_multi_robot = [
     {
         "name": "publish_cmd_vel",
-        "description": "Publish cmd_vel message to control the movement and rotation of turtlesim. This function is only compatible with turtlesim and not for robotic arm.",
+        "description": "Control robot movement and rotation.",
         "parameters": {
             "type": "object",
             "properties": {
                 "robot_name": {
                     "type": "string",
-                    "description": "Name of the robot instance that should be controlled. Valid robot names are 'tb1','tb2','tb3','tb4', when no specific robot name is specified, robot_name=''",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
                 },
                 "duration": {
                     "type": "number",
-                    "description": "Duration of time (in seconds) for which the movement should be performed.",
+                    "description": "Movement duration (seconds).",
                 },
                 "linear_x": {
                     "type": "number",
-                    "description": "Linear velocity along the x-axis for the robot.",
-                },
-                "linear_y": {
-                    "type": "number",
-                    "description": "Linear velocity along the y-axis for the robot.",
-                },
-                "linear_z": {
-                    "type": "number",
-                    "description": "Linear velocity along the z-axis for the robot.",
-                },
-                "angular_x": {
-                    "type": "number",
-                    "description": "Angular velocity around the x-axis for the robot.",
-                },
-                "angular_y": {
-                    "type": "number",
-                    "description": "Angular velocity around the y-axis for the robot.",
+                    "description": "Linear velocity along x-axis.",
                 },
                 "angular_z": {
                     "type": "number",
-                    "description": "Angular velocity around the z-axis for the robot.",
+                    "description": "Angular velocity around z-axis.",
                 },
             },
             "required": [
                 "robot_name",
                 "duration",
                 "linear_x",
-                "linear_y",
-                "linear_z",
-                "angular_x",
-                "angular_y",
                 "angular_z",
             ],
         },
     },
+    {
+        "name": "move_in_circle",
+        "description": "Move robot in a circle.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
+                },
+                "radius": {
+                    "type": "number",
+                    "description": "Circle radius.",
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "Movement duration (seconds).",
+                },
+            },
+            "required": [
+                "robot_name",
+                "radius",
+                "duration",
+            ],
+        },
+    },
+    {
+        "name": "move_in_rectangle",
+        "description": "Move robot in a rectangle.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "robot_name": {
+                    "type": "string",
+                    "description": "Robot name ('tb1', 'tb2', 'tb3', 'tb4').",
+                },
+                "length": {
+                    "type": "number",
+                    "description": "Rectangle length.",
+                },
+                "width": {
+                    "type": "number",
+                    "description": "Rectangle width.",
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "Movement duration (seconds).",
+                },
+            },
+            "required": [
+                "robot_name",
+                "length",
+                "width",
+                "duration",
+            ],
+        },
+    },
 ]
-
 
 class RobotBehavior:
     """

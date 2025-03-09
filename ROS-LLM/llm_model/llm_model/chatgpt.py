@@ -11,10 +11,12 @@ import os
 import time
 import openai
 from llm_config.user_config import UserConfig
+from openai import OpenAI
 
 # Global Initialization
 config = UserConfig()
 openai.api_key = config.openai_api_key
+openai.api_base = config.openai_api_base
 
 class ChatGPTNode(Node):
     def __init__(self):
@@ -39,7 +41,7 @@ class ChatGPTNode(Node):
         self.write_chat_history_to_json()
         self.get_logger().info(f"Chat history saved to {self.chat_history_file}")
         self.publish_string("llm_model_processing", self.initialization_publisher)
-
+        self.client = OpenAI(base_url=config.openai_api_base,api_key=config.openai_api_key)
     def state_listener_callback(self, msg):
         self.get_logger().debug(f"model node get current State:{msg}")
 
@@ -65,7 +67,7 @@ class ChatGPTNode(Node):
         return config.chat_history
 
     def generate_chatgpt_response(self, messages_input):
-        response = openai.ChatCompletion.create(
+        response = self.client.chat.completions.create(
             model=config.openai_model,
             messages=messages_input,
             functions=config.robot_functions_list,
@@ -75,7 +77,7 @@ class ChatGPTNode(Node):
 
     def process_chatgpt_response(self, messages_input):
         chatgpt_response = self.generate_chatgpt_response(messages_input)
-        message, content, function_call, function_flag = self.get_response_information(chatgpt_response)
+        choice, message, content, function_call, function_flag = self.get_response_information(chatgpt_response)
         self.add_message_to_history(role="assistant", content=content, function_call=function_call)
         self.write_chat_history_to_json()
         if function_flag == 1:  # 如果响应类型是函数调用
@@ -95,14 +97,30 @@ class ChatGPTNode(Node):
         self.process_chatgpt_response(config.chat_history)
         
     def get_response_information(self, chatgpt_response):
-        message = chatgpt_response["choices"][0]["message"]
-        content = message.get("content")
-        function_call = message.get("function_call", None)
+        # 判断返回值类型
+        if isinstance(chatgpt_response, dict):  # 如果是旧版 SDK 返回的字典
+            choice = chatgpt_response["choices"][0]["message"]
+            content = choice.get("content")
+            function_call = choice.get("function_call", None)
+        else:  # 如果是新版 SDK 返回的类实例
+            choice = chatgpt_response.choices[0]  # 访问 ChatCompletion 的 choices 属性
+            message = choice.message              # 获取 Message 对象
+            content = getattr(message, "content", None)  # 提取 content
+            function_call = getattr(message, "function_call", None)  # 提取 function_call
+        # 将 function_call 转换为可序列化的格式
+        if function_call:
+            function_call = {
+                "name": function_call.name,
+                "arguments": function_call.arguments
+            }
+        # 判断响应类型
         function_flag = 0 if content is not None else 1
-        self.get_logger().info(f"Get message from OpenAI: {message}, type: {type(message)}")
+
+        # 打印日志信息
+        self.get_logger().info(f"Get message from OpenAI: {choice}, type: {type(choice)}")
         self.get_logger().info(f"Get content from OpenAI: {content}, type: {type(content)}")
         self.get_logger().info(f"Get function call from OpenAI: {function_call}, type: {type(function_call)}")
-        return message, content, function_call, function_flag
+        return choice, message, content, function_call, function_flag
 
     def write_chat_history_to_json(self):
         try:
