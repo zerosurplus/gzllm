@@ -147,33 +147,29 @@ class TurtleRobot(Node):
         }
 
     def motion_control_loop(self):
-        """非阻塞运动控制核心逻辑"""
-        if self.current_motion is not None:
-            current_time = self.get_clock().now()
-            elapsed_time = (current_time - self.current_motion_start_time).nanoseconds / 1e9
-            
-            if elapsed_time < self.current_motion_duration:
-                # 持续发布速度指令
-                self.current_motion_publisher.publish(self.current_motion_twist)
-                self.get_logger().debug(f"Motion: Publishing twist at {current_time.nanoseconds}")
-            else:
-                # 发布停止指令
-                stop_twist = Twist()
-                self.current_motion_publisher.publish(stop_twist)
-                self.get_logger().info(f"Motion: Stopped at {current_time.nanoseconds}")
-                
-                # 清理资源
-                self.current_motion = None
-                self.get_logger().info(f"Motion completed")
+        current_time = self.get_clock().now()
+        motions_to_remove = []  # 用于存储需要删除的运动任务
 
-        if self.current_motion is None and self.motion_queue:
-            # 启动下一个任务
-            self.current_motion = self.motion_queue.popleft()
-            self.current_motion_start_time = self.get_clock().now()
-            self.current_motion_duration = self.current_motion["duration"]
-            self.current_motion_twist = self.current_motion["twist"]
-            self.current_motion_publisher = self.get_publisher(self.current_motion["robot_name"])
-            self.get_logger().info(f"Started motion with duration {self.current_motion_duration} seconds")
+        for robot_name, motion in self.active_motions.items():
+            elapsed_time = (current_time - motion["start_time"]).nanoseconds / 1e9
+            if elapsed_time < motion["duration"]:
+                motion["publisher"].publish(motion["twist"])
+            else:
+                stop_twist = Twist()
+                motion["publisher"].publish(stop_twist)
+                self.get_logger().info(f"Motion for {robot_name} completed")
+                motions_to_remove.append(robot_name)  # 标记需要删除的运动任务
+
+        for motion in list(self.motion_queue):
+            if motion["robot_name"] not in self.active_motions:
+                self.active_motions[motion["robot_name"]] = motion
+                motion["start_time"] = current_time
+                self.motion_queue.remove(motion)
+                self.get_logger().info(f"Started motion for {motion['robot_name']} with duration {motion['duration']} seconds")
+
+        # 统一删除已完成的运动任务
+        for robot_name in motions_to_remove:
+            del self.active_motions[robot_name]
 
     def get_publisher(self, robot_name):
         # 获取或创建发布者
@@ -282,7 +278,7 @@ class TurtleRobot(Node):
         self.navigate_to_position(robot_name, target_x, target_y)
         self.get_logger().info(f"Robot {robot_name} navigating to robot {target_robot_name}")
 
-    def add_motion_to_queue(self, robot_name, duration, twist, publisher, target_x=None, target_y=None, Kp=None, Ki=None, Kd=None):
+    def add_motion_to_queue(self, robot_name, duration, twist, publisher):
         motion_id = f"{robot_name}_{time.time()}"
         self.motion_queue.append({
             "motion_id": motion_id,
@@ -290,13 +286,6 @@ class TurtleRobot(Node):
             "duration": duration,
             "twist": twist,
             "publisher": publisher,
-            "target_x": target_x,
-            "target_y": target_y,
-            "Kp": Kp,
-            "Ki": Ki,
-            "Kd": Kd,
-            "integral": 0.0,
-            "previous_error": 0.0,
             "start_time": None,
             "end_time": None
         })

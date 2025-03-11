@@ -73,14 +73,28 @@ class ChatGPTNode(Node):
             functions=config.robot_functions_list,
             function_call="auto",
         )
-        return response
+        # 解析响应以确保生成函数调用请求
+        if isinstance(response, dict):  # 如果是旧版 SDK 返回的字典
+            choice = response["choices"][0]["message"]
+            function_call = choice.get("function_call", None)
+        else:  # 如果是新版 SDK 返回的类实例
+            choice = response.choices[0]  # 访问 ChatCompletion 的 choices 属性
+            message = choice.message              # 获取 Message 对象
+            function_call = getattr(message, "function_call", None)  # 提取 function_call
+        # 将 function_call 转换为可序列化的格式
+        if function_call:
+            function_call = {
+                "name": function_call.name,
+                "arguments": function_call.arguments
+            }
+        return response, function_call
 
     def process_chatgpt_response(self, messages_input):
-        chatgpt_response = self.generate_chatgpt_response(messages_input)
-        choice, message, content, function_call, function_flag = self.get_response_information(chatgpt_response)
+        chatgpt_response, function_call = self.generate_chatgpt_response(messages_input)
+        choice, message, content, _, function_flag = self.get_response_information(chatgpt_response)
         self.add_message_to_history(role="assistant", content=content, function_call=function_call)
         self.write_chat_history_to_json()
-        if function_flag == 1:  # 如果响应类型是函数调用
+        if function_call:  # 如果响应类型是函数调用
             self.publish_string("function_call", self.llm_response_type_publisher)
             self.get_logger().info("STATE: function_execution")
             self.function_call(function_call)  # 调用机器人函数
