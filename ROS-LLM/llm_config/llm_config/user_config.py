@@ -79,9 +79,27 @@ class UserConfig:
 
         # IO related
         # [optional]: The prompt given to the AI, provided by the user
-        self.user_prompt = ""
-        # [optional]: The generated prompt by the administrator, used as a prefix for the AI's response
         self.system_prompt = ""
+        # [optional]: The generated prompt by the administrator, used as a prefix for the AI's response
+        self.system_prompt = """
+        # 指令
+        1. 用户指令可能涉及多个机器人动作，请严格按以下规则生成响应：
+        2. 输出格式: 仅返回一个纯JSON数组，每个元素为函数调用，格式示例：
+        [{"name":"函数名", "arguments":{"参数1":值, "参数2":值}},...]
+
+        # 规则
+        - 参数必填：所有函数参数必须显式写出（例如 move_in_circle 必须包含 radius 和 duration）
+        - 默认逻辑：未明确指定的数值参数按默认规则推导（例如速度=1m/s → duration=路径长度）
+        - 禁止注释：JSON中不得包含自然语言或解释性文本
+
+        # 示例参考
+        用户指令：tb3画半径0.5米的圆，tb4用3x3正方形跑10秒
+        模型输出：
+        [
+        {"name":"move_in_circle", "arguments":{"robot_name":"tb3", "radius":0.5, "duration":3.14}},
+        {"name":"move_in_rectangle", "arguments":{"robot_name":"tb4", "length":3, "width":3, "duration":10}}
+        ]
+        """
         # TODO: System prompt only works for the first message,so it will be forgotten soon after the first message
         # modify the llm_model/chatgpt.py, add system_prompt to every prompt to solve this problem @Herman Ye
         # [optional]: The generated response provided by the AI

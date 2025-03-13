@@ -40,8 +40,8 @@ class TurtleRobot(Node):
         self.current_motion_twist = Twist()  # 当前运动任务的速度指令
         self.current_motion_publisher = None  # 当前运动任务的发布者
 
-        # 创建定时器（20 Hz）
-        self.create_timer(0.05, self.motion_control_loop)
+        # 创建定时器
+        self.create_timer(0.02, self.motion_control_loop)
 
         # 初始化 Nav2 客户端
         self.navigator = BasicNavigator()
@@ -70,7 +70,11 @@ class TurtleRobot(Node):
                 angular_z = min(max(-1.0, float(function_args["angular_z"])), 1.0)
                 
                 # 将运动任务添加到队列
-                self.add_motion_to_queue(robot_name, duration, linear_x, angular_z)
+                twist = Twist()
+                twist.linear.x = linear_x
+                twist.angular.z = angular_z
+                publisher = self.get_publisher(robot_name)
+                self.add_motion_to_queue(robot_name, duration, twist, publisher)
                 response.response_text = f"Motion command added to queue for {robot_name}"
             elif function_name == "move_in_circle":
                 function_args = self._validate_arguments(req.get("arguments", {}))
@@ -216,6 +220,7 @@ class TurtleRobot(Node):
         else:
             # 默认时间，可以根据需要调整
             time_per_side = 5.0
+            self.get_logger().info(f"No duration specified for move_in_rectangle. Using default time per side: {time_per_side} seconds")
 
         # 创建 Twist 消息
         twist_length = Twist()

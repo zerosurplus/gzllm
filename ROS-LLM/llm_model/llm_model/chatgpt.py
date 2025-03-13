@@ -52,56 +52,97 @@ class ChatGPTNode(Node):
         self.get_logger().info(f"Topic: {publisher_to_use.topic_name}\nMessage published: {msg.data}")
 
     def add_message_to_history(self, role, content="null", function_call=None, name=None):
-        message_element_object = {
-            "role": role,
-            "content": content,
-        }
-        if name is not None:
-            message_element_object["name"] = name
-        if function_call is not None:
-            message_element_object["function_call"] = function_call
-        config.chat_history.append(message_element_object)
+        # 修复点：严格校验函数调用结构
+        message = {"role": role, "content": content}
+        
+        # 添加函数调用字段（当且仅当有效时）
+        if function_call and isinstance(function_call, dict):
+            if "name" in function_call and "arguments" in function_call:
+                # 确保 arguments 是字符串格式
+                message["function_call"] = {
+                    "name": str(function_call["name"]),
+                    "arguments": json.dumps(function_call["arguments"])
+                }
+            else:
+                self.get_logger().warning("无效的函数调用结构，已过滤")
+        
+        # 添加name字段（如需要）
+        if name:
+            message["name"] = name
+        
+        # 维护历史长度
+        config.chat_history.append(message)
         if len(config.chat_history) > config.chat_history_max_length:
-            self.get_logger().info(f"Chat history is too long, popping the oldest message: {config.chat_history[0]}")
-            config.chat_history.pop(0)
+            removed = config.chat_history.pop(0)
+            self.get_logger().debug(f"移除历史消息: {removed}")
+        
         return config.chat_history
 
     def generate_chatgpt_response(self, messages_input):
-        response = self.client.chat.completions.create(
-            model=config.openai_model,
-            messages=messages_input,
-            functions=config.robot_functions_list,
-            function_call="auto",
-        )
-        # 解析响应以确保生成函数调用请求
-        if isinstance(response, dict):  # 如果是旧版 SDK 返回的字典
-            choice = response["choices"][0]["message"]
-            function_call = choice.get("function_call", None)
-        else:  # 如果是新版 SDK 返回的类实例
-            choice = response.choices[0]  # 访问 ChatCompletion 的 choices 属性
-            message = choice.message              # 获取 Message 对象
-            function_call = getattr(message, "function_call", None)  # 提取 function_call
-        # 将 function_call 转换为可序列化的格式
-        if function_call:
-            function_call = {
-                "name": function_call.name,
-                "arguments": function_call.arguments
-            }
-        return response, function_call
+        # 修复点：完全适配新版SDK，正确处理FunctionCall对象
+        try:
+            response = self.client.chat.completions.create(
+                model=config.openai_model,
+                messages=messages_input,
+                functions=config.robot_functions_list,
+                function_call="auto",
+            )
+            
+            # 新版SDK响应解析
+            message = response.choices[0].message
+            function_call = None
+            
+            # 提取函数调用信息
+            if hasattr(message, "function_call") and message.function_call:
+                fc = message.function_call
+                function_call = {
+                    "name": fc.name,
+                    "arguments": self._parse_arguments(fc.arguments)
+                }
+            
+            return response, function_call
+        
+        except Exception as e:
+            self.get_logger().error(f"生成响应时发生错误: {str(e)}")
+            return None, None
+
+    def _parse_arguments(self, arguments_str):
+        """安全解析arguments字符串为字典"""
+        try:
+            return json.loads(arguments_str) if isinstance(arguments_str, str) else {}
+        except json.JSONDecodeError:
+            self.get_logger().error("无法解析的arguments格式")
+            return {}
 
     def process_chatgpt_response(self, messages_input):
-        chatgpt_response, function_call = self.generate_chatgpt_response(messages_input)
-        choice, message, content, _, function_flag = self.get_response_information(chatgpt_response)
-        self.add_message_to_history(role="assistant", content=content, function_call=function_call)
-        self.write_chat_history_to_json()
-        if function_call:  # 如果响应类型是函数调用
-            self.publish_string("function_call", self.llm_response_type_publisher)
-            self.get_logger().info("STATE: function_execution")
-            self.function_call(function_call)  # 调用机器人函数
-        else:  # 如果响应类型不是函数调用
-            self.publish_string("feedback_for_user", self.llm_response_type_publisher)
-            self.get_logger().info("STATE: feedback_for_user")
-            self.publish_string(content, self.llm_feedback_publisher)
+        # 确保 system_prompt 存在
+        if not config.chat_history or config.chat_history[0]["role"] != "system":
+            config.chat_history.insert(0, {"role": "system", "content": config.system_prompt})
+        # 修复点：避免添加空函数调用
+        try:
+            chatgpt_response, function_call = self.generate_chatgpt_response(messages_input)
+            if chatgpt_response is None:
+                self.get_logger().error("无法获取有效响应")
+                return
+            
+            # 添加消息到历史（区分函数调用和普通响应）
+            if function_call:
+                self.add_message_to_history(
+                    role="assistant", 
+                    function_call=function_call
+                )
+                self.publish_string("function_call", self.llm_response_type_publisher)
+                self.function_call(function_call)
+            else:
+                content = chatgpt_response.choices[0].message.content
+                self.add_message_to_history(role="assistant", content=content)
+                self.publish_string("feedback_for_user", self.llm_response_type_publisher)
+                self.publish_string(content, self.llm_feedback_publisher)
+            
+            self.write_chat_history_to_json()
+        
+        except Exception as e:
+            self.get_logger().error(f"响应处理失败: {str(e)}")
 
     def llm_callback(self, msg):
         self.get_logger().info("STATE: model_processing")
@@ -111,30 +152,38 @@ class ChatGPTNode(Node):
         self.process_chatgpt_response(config.chat_history)
         
     def get_response_information(self, chatgpt_response):
-        # 判断返回值类型
-        if isinstance(chatgpt_response, dict):  # 如果是旧版 SDK 返回的字典
-            choice = chatgpt_response["choices"][0]["message"]
-            content = choice.get("content")
-            function_call = choice.get("function_call", None)
-        else:  # 如果是新版 SDK 返回的类实例
-            choice = chatgpt_response.choices[0]  # 访问 ChatCompletion 的 choices 属性
-            message = choice.message              # 获取 Message 对象
-            content = getattr(message, "content", None)  # 提取 content
-            function_call = getattr(message, "function_call", None)  # 提取 function_call
-        # 将 function_call 转换为可序列化的格式
-        if function_call:
-            function_call = {
-                "name": function_call.name,
-                "arguments": function_call.arguments
-            }
-        # 判断响应类型
-        function_flag = 0 if content is not None else 1
-
-        # 打印日志信息
-        self.get_logger().info(f"Get message from OpenAI: {choice}, type: {type(choice)}")
-        self.get_logger().info(f"Get content from OpenAI: {content}, type: {type(content)}")
-        self.get_logger().info(f"Get function call from OpenAI: {function_call}, type: {type(function_call)}")
-        return choice, message, content, function_call, function_flag
+        # 修复点：严格区分内容响应和函数调用
+        try:
+            message = chatgpt_response.choices[0].message
+            content = message.content
+            
+            # 提取函数调用信息
+            function_call = None
+            if hasattr(message, "function_call") and message.function_call:
+                fc = message.function_call
+                function_call = {
+                    "name": fc.name,
+                    "arguments": self._parse_arguments(fc.arguments)
+                }
+            
+            # 判定响应类型
+            function_flag = 1 if function_call else 0
+            
+            # 记录调试信息
+            self.get_logger().info(f"响应内容: {content}")
+            self.get_logger().info(f"函数调用: {json.dumps(function_call, ensure_ascii=False)}")
+            
+            return (
+                chatgpt_response.choices[0],
+                message,
+                content,
+                function_call,
+                function_flag
+            )
+        
+        except AttributeError as e:
+            self.get_logger().error(f"响应解析失败: {str(e)}")
+            return None, None, None, None, 0
 
     def write_chat_history_to_json(self):
         try:
@@ -185,24 +234,22 @@ class ChatGPTNode(Node):
             self.get_logger().error(f"函数调用预处理失败: {str(e)}")
 
     def _parse_function_arguments(self, function_call_input):
-        """处理多级编码参数"""
-        raw_arguments = function_call_input.get("arguments", {})
-        
-        # 处理字符串类型的arguments
-        if isinstance(raw_arguments, str):
-            try:
-                return json.loads(raw_arguments)
-            except json.JSONDecodeError:
-                self.get_logger().error("无法解析的arguments格式")
-                return {}
-        
-        # 处理字典类型的arguments
-        return {
-            "robot_name": str(raw_arguments.get("robot_name", "tb1")),
-            "duration": float(raw_arguments.get("duration", 5)),
-            "linear_x": float(raw_arguments.get("linear_x", 0.0)),
-            "angular_z": float(raw_arguments.get("angular_z", 0.0))
-        }
+        """解析函数参数"""
+        try:
+            arguments = function_call_input.get("arguments", {})
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+            elif not isinstance(arguments, dict):
+                self.get_logger().warning("arguments 不是字典类型，尝试解析为字典")
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    self.get_logger().error("无法解析的arguments格式")
+                    arguments = {}
+            return arguments
+        except json.JSONDecodeError:
+            self.get_logger().error("无法解析的arguments格式")
+            return {}
 
     def function_call_response_callback(self, future):
         try:
